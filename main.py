@@ -1,24 +1,236 @@
 import pandas as pd
 import asyncio
 from datetime import datetime, date
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # ==================== CONFIG ====================
-TELEGRAM_BOT_TOKEN = "8884302613:AAF4cVrPihPiaM9yDdUw2uMW88s2S0AQR5k"  # REPLACE!
+TELEGRAM_BOT_TOKEN = "8884302613:AAF4cVrPihPiaM9yDdUw2uMW88s2S0AQR5k"  # REPLACE WITH YOUR REAL TOKEN!
 ADMIN_CHAT_ID = "5546896254"
 BINANCE_ID = "1251705066"
 KING_PASS = ["5546896254"]
 
 # Data stores
-USERS = {}          # {cid: {status, mode, role, queries, notified, banned, jobs_viewed, ad_views, last_ad_date}}
-CACHE = {}          # {cid: {role: [jobs], "todays": [jobs], "browse_all": [jobs]}}
-PENDING = {}        # {cid: {time, status}}
-AD_REVENUE = {}     # {date_str: {views: int, earnings: float}}
+USERS = {}
+CACHE = {}
+PENDING = {}
+AD_REVENUE = {}
 
 # Ad settings
-AD_INTERVAL = 3     # Show ad every 3 job views
-AD_EARNINGS_PER_VIEW = 0.50  # $0.50 per ad view (example rate)
+AD_INTERVAL = 3
+AD_EARNINGS_PER_VIEW = 0.50
+
+# ==================== UI MENUS ====================
+def get_main_screen():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🆓 ━━━━━━━━━ NORMAL BOT ━━━━━━━━━", callback_data="enter_normal")],
+        [InlineKeyboardButton("   FREE • Browse Jobs • Ads", callback_data="enter_normal")],
+        [InlineKeyboardButton("👑 ━━━━━━━━━ PREMIUM BOT ━━━━━━━━━", callback_data="enter_premium")],
+        [InlineKeyboardButton("   $10/mo • Instant • No Ads", callback_data="enter_premium")],
+        [InlineKeyboardButton("📊 Compare Normal vs Premium", callback_data="compare_modes")]
+    ])
+
+def get_normal_dashboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔍 SEARCH JOBS BY ROLE", callback_data="normal_search_roles")],
+        [InlineKeyboardButton("📋 BROWSE ALL OPEN JOBS", callback_data="normal_browse_all")],
+        [InlineKeyboardButton("🔒 SEE PREMIUM-LOCKED JOBS", callback_data="normal_see_premium")],
+        [InlineKeyboardButton("━" * 18, callback_data="noop")],
+        [InlineKeyboardButton("👑 UPGRADE TO PREMIUM", callback_data="unlock_premium")],
+        [InlineKeyboardButton("🏠 BACK TO MAIN", callback_data="back_main")]
+    ])
+
+def get_premium_dashboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔍 SEARCH JOBS BY ROLE", callback_data="premium_search_roles")],
+        [InlineKeyboardButton("📅 TODAY'S JOBS (PREMIUM VAULT)", callback_data="premium_todays_vault")],
+        [InlineKeyboardButton("⚡ REAL-TIME ALERT SETTINGS", callback_data="premium_alerts")],
+        [InlineKeyboardButton("📊 AI MATCH COMPARISON", callback_data="premium_compare")],
+        [InlineKeyboardButton("━" * 18, callback_data="noop")],
+        [InlineKeyboardButton("👤 MY PROFILE", callback_data="premium_profile")],
+        [InlineKeyboardButton("🏠 BACK TO MAIN", callback_data="back_main")]
+    ])
+
+def get_role_menu(mode):
+    prefix = "N_" if mode == "normal" else "P_"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎓 JUNIOR CLINICAL FELLOW (JCF)", callback_data=f"{prefix}JCF"),
+         InlineKeyboardButton("🎓 SENIOR CLINICAL FELLOW (SCF)", callback_data=f"{prefix}SCF")],
+        [InlineKeyboardButton("🏫 TEACHING & RESEARCH", callback_data=f"{prefix}Teaching"),
+         InlineKeyboardButton("🏥 TRUST GRADE / SHO", callback_data=f"{prefix}TrustGrade")],
+        [InlineKeyboardButton("🚨 LAS (LOCUM ST1/2)", callback_data=f"{prefix}LAS"),
+         InlineKeyboardButton("💼 LOCUM / BANK", callback_data=f"{prefix}Locum")],
+        [InlineKeyboardButton("🩻 FOUNDATION YEAR 1", callback_data=f"{prefix}FY1"),
+         InlineKeyboardButton("🩻 FOUNDATION YEAR 2", callback_data=f"{prefix}FY2")],
+        [InlineKeyboardButton("🧬 CORE TRAINEE (CT1-CT3)", callback_data=f"{prefix}CT"),
+         InlineKeyboardButton("🧬 ST1-ST2 REGISTRAR", callback_data=f"{prefix}ST_Junior")],
+        [InlineKeyboardButton("🧬 ST3-ST8 REGISTRAR", callback_data=f"{prefix}ST_Senior"),
+         InlineKeyboardButton("👑 SAS GRADE DOCTOR", callback_data=f"{prefix}SAS")],
+        [InlineKeyboardButton("👑 SPECIALIST GRADE", callback_data=f"{prefix}Specialist"),
+         InlineKeyboardButton("🩺 SALARIED GP", callback_data=f"{prefix}GP")],
+        [InlineKeyboardButton("🦷 DENTAL TRACKS", callback_data=f"{prefix}Dental")],
+        [InlineKeyboardButton("━" * 18, callback_data="noop")],
+        [InlineKeyboardButton("🔙 BACK TO DASHBOARD", callback_data=f"back_{mode}")]
+    ])
+
+def get_job_swarm(jobs, role, mode, page=0, per_page=8):
+    buttons = []
+    now = datetime.now()
+    start = page * per_page
+    end = min(start + per_page, len(jobs))
+    
+    buttons.append([InlineKeyboardButton(f"📚 {role} — {len(jobs)} JOBS FOUND", callback_data="noop")])
+    buttons.append([InlineKeyboardButton("━" * 18, callback_data="noop")])
+    
+    for i in range(start, end):
+        job = jobs[i]
+        t = datetime.strptime(job['Timestamp'], '%Y-%m-%d %H:%M:%S')
+        age_hours = (now - t).total_seconds() / 3600
+        
+        if mode == "normal" and age_hours < 12:
+            label = f"🔒 {job['Employer'][:28]}... (PREMIUM ONLY)"
+            cb = f"LOCK_{role}_{i}"
+        else:
+            label = f"✅ {job['Employer'][:32]}..."
+            cb = f"VIEW_{mode}_{role}_{i}"
+        
+        buttons.append([InlineKeyboardButton(label, callback_data=cb)])
+    
+    buttons.append([InlineKeyboardButton("━" * 18, callback_data="noop")])
+    
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️ PREV", callback_data=f"PAGE_{mode}_{role}_{page-1}"))
+    nav.append(InlineKeyboardButton(f"{page+1}/{(len(jobs)-1)//per_page + 1}", callback_data="noop"))
+    if end < len(jobs):
+        nav.append(InlineKeyboardButton("NEXT ➡️", callback_data=f"PAGE_{mode}_{role}_{page+1}"))
+    if nav:
+        buttons.append(nav)
+    
+    if end < len(jobs):
+        remaining = len(jobs) - end
+        buttons.append([InlineKeyboardButton(f"📥 LOAD MORE ({remaining} remaining)", 
+                                            callback_data=f"PAGE_{mode}_{role}_{page+1}")])
+    
+    buttons.append([InlineKeyboardButton("🔙 BACK TO ROLES", callback_data=f"{mode}_search_roles"),
+                    InlineKeyboardButton("🏠 MAIN MENU", callback_data="back_main")])
+    
+    return InlineKeyboardMarkup(buttons)
+
+def get_ad_screen(jobs_viewed, ad_views_today, earnings_so_far):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📺 ━━━━━━━ SPONSORED ADVERTISEMENT ━━━━━━━", callback_data="noop")],
+        [InlineKeyboardButton("━" * 18, callback_data="noop")],
+        [InlineKeyboardButton("🚀 UK VISA & IMG CONSULTING SERVICES", url="https://t.me/your_channel")],
+        [InlineKeyboardButton("💼 NHS JOB APPLICATION ASSISTANCE", url="https://t.me/your_channel")],
+        [InlineKeyboardButton("📚 PLAB 1/2 PREPARATION COURSES", url="https://t.me/your_channel")],
+        [InlineKeyboardButton("━" * 18, callback_data="noop")],
+        [InlineKeyboardButton(f"📊 Your Stats: {jobs_viewed} jobs viewed", callback_data="noop")],
+        [InlineKeyboardButton(f"💰 Ad Views Today: {ad_views_today}", callback_data="noop")],
+        [InlineKeyboardButton("━" * 18, callback_data="noop")],
+        [InlineKeyboardButton("✅ AD VIEWED — CONTINUE SEARCHING", callback_data="ad_dismiss")],
+        [InlineKeyboardButton("👑 UPGRADE TO REMOVE ADS FOREVER", callback_data="unlock_premium")]
+    ])
+
+def get_job_detail(idx, role, mode, total, is_premium):
+    buttons = []
+    nav = []
+    if idx > 0:
+        nav.append(InlineKeyboardButton("⬅️", callback_data=f"NAV_{mode}_{role}_{idx-1}"))
+    nav.append(InlineKeyboardButton(f"{idx+1}/{total}", callback_data="noop"))
+    if idx < total - 1:
+        nav.append(InlineKeyboardButton("➡️", callback_data=f"NAV_{mode}_{role}_{idx+1}"))
+    buttons.append(nav)
+    
+    buttons.append([InlineKeyboardButton("📋 COPY ROLE NAME", callback_data=f"COPYROLE_{mode}_{role}_{idx}")])
+    
+    if is_premium:
+        buttons.append([InlineKeyboardButton("📊 AI COMPARE ME VS JOB", callback_data=f"AI_{mode}_{role}_{idx}")])
+    
+    buttons.append([InlineKeyboardButton("🔙 BACK TO LIST", callback_data=f"PAGE_{mode}_{role}_0"),
+                    InlineKeyboardButton("🏠 MAIN", callback_data="back_main")])
+    
+    return InlineKeyboardMarkup(buttons)
+
+def get_locked_job(idx, role, total):
+    buttons = []
+    nav = []
+    if idx > 0:
+        nav.append(InlineKeyboardButton("⬅️", callback_data=f"NAV_normal_{role}_{idx-1}"))
+    nav.append(InlineKeyboardButton(f"{idx+1}/{total}", callback_data="noop"))
+    if idx < total - 1:
+        nav.append(InlineKeyboardButton("➡️", callback_data=f"NAV_normal_{role}_{idx+1}"))
+    buttons.append(nav)
+    
+    buttons.append([InlineKeyboardButton("🔒 PREMIUM VAULT — UNLOCK NOW", callback_data="unlock_premium")])
+    buttons.append([InlineKeyboardButton("🔙 BACK TO LIST", callback_data=f"PAGE_normal_{role}_0"),
+                    InlineKeyboardButton("🏠 MAIN", callback_data="back_main")])
+    
+    return InlineKeyboardMarkup(buttons)
+
+def get_todays_vault(jobs, page=0, per_page=5):
+    buttons = []
+    start = page * per_page
+    end = min(start + per_page, len(jobs))
+    
+    buttons.append([InlineKeyboardButton("🔐 PREMIUM VAULT — TODAY'S JOBS", callback_data="noop")])
+    buttons.append([InlineKeyboardButton("━" * 18, callback_data="noop")])
+    
+    for i in range(start, end):
+        job = jobs[i]
+        mins = int((datetime.now() - datetime.strptime(job['Timestamp'], '%Y-%m-%d %H:%M:%S')).total_seconds() / 60)
+        label = f"🔥 {job['Role']} @ {job['Employer'][:22]}... ({mins}m)"
+        buttons.append([InlineKeyboardButton(label, callback_data=f"TODAYVIEW_{i}")])
+    
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️", callback_data=f"TODAYPAGE_{page-1}"))
+    nav.append(InlineKeyboardButton(f"{page+1}/{(len(jobs)-1)//per_page + 1}", callback_data="noop"))
+    if end < len(jobs):
+        nav.append(InlineKeyboardButton("➡️", callback_data=f"TODAYPAGE_{page+1}"))
+    if nav:
+        buttons.append(nav)
+    
+    buttons.append([InlineKeyboardButton("🏠 MAIN MENU", callback_data="back_main")])
+    return InlineKeyboardMarkup(buttons)
+
+def get_payment_screen():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💰 PAYMENT: $10/month", callback_data="noop")],
+        [InlineKeyboardButton("━" * 18, callback_data="noop")],
+        [InlineKeyboardButton("🪙 Binance ID: 1251705066", callback_data="noop")],
+        [InlineKeyboardButton("Send 10.00 USDT", callback_data="noop")],
+        [InlineKeyboardButton("━" * 18, callback_data="noop")],
+        [InlineKeyboardButton("🧾 I'VE PAID — SUBMIT RECEIPT", callback_data="pay_submit")],
+        [InlineKeyboardButton("↩️ CANCEL", callback_data="back_main")]
+    ])
+
+def get_pending_screen():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⏳ PAYMENT PENDING", callback_data="noop")],
+        [InlineKeyboardButton("━" * 18, callback_data="noop")],
+        [InlineKeyboardButton("Awaiting admin approval...", callback_data="noop")],
+        [InlineKeyboardButton("You'll be notified within 24h", callback_data="noop")],
+        [InlineKeyboardButton("━" * 18, callback_data="noop")],
+        [InlineKeyboardButton("🏠 MAIN MENU", callback_data="back_main")]
+    ])
+
+def get_admin_approval(user_id):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"✅ APPROVE USER {user_id}", callback_data=f"ADMIN_APPROVE_{user_id}")],
+        [InlineKeyboardButton(f"❌ REJECT USER {user_id}", callback_data=f"ADMIN_REJECT_{user_id}")]
+    ])
+
+def get_revenue_dashboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💰 ━━━ AD REVENUE DASHBOARD ━━━", callback_data="noop")],
+        [InlineKeyboardButton("━" * 18, callback_data="noop")],
+        [InlineKeyboardButton("📊 View Today's Stats", callback_data="admin_today_stats")],
+        [InlineKeyboardButton("📈 View Monthly Report", callback_data="admin_monthly_stats")],
+        [InlineKeyboardButton("💸 Withdraw to Binance", callback_data="admin_withdraw")],
+        [InlineKeyboardButton("━" * 18, callback_data="noop")],
+        [InlineKeyboardButton("🔙 BACK", callback_data="back_main")]
+    ])
 
 # ==================== START ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -36,7 +248,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ ACCOUNT BANNED", parse_mode="Markdown")
         return
     
-    # King
     if cid in KING_PASS:
         USERS[cid]["status"] = "active"
         await update.message.reply_text(
@@ -49,7 +260,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # Pending check
     if cid in PENDING and PENDING[cid]["status"] == "pending":
         await update.message.reply_text(
             "⏳ *PAYMENT PENDING*\n\nAwaiting admin approval.",
@@ -58,12 +268,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # Normal welcome
     await update.message.reply_text(
         "🏥 *NHS UK MEDICAL & DENTAL JOBS BOT* 🇬🇧\n\n"
         "*Choose your access level:*\n\n"
         "🆓 *NORMAL BOT — FREE*\n"
-        "• Jobs posted 12+ hours ago\n"
+        "• Browse jobs posted 12+ hours ago\n"
         "• Full Person Specifications\n"
         "• 2 searches per session\n"
         "• 📺 Ads every 3 job views\n\n"
@@ -131,7 +340,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cid = str(query.message.chat_id)
     data = query.data
     
-    # Init user
     if cid not in USERS:
         USERS[cid] = {
             "status": "active" if cid in KING_PASS else "free",
@@ -143,18 +351,16 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if USERS[cid].get("banned"):
         return
     
-    # Load data
     try:
         df = pd.read_csv("traced_nhs_jobs.csv")
     except:
         await query.message.reply_text("⚠️ Database error.")
         return
     
-    # ========== NOOP ==========
     if data == "noop":
         return
     
-    # ========== ADMIN ACTIONS ==========
+    # ADMIN ACTIONS
     if data.startswith("ADMIN_APPROVE_"):
         target = data.replace("ADMIN_APPROVE_", "")
         USERS[target]["status"] = "active"
@@ -189,7 +395,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(f"❌ Rejected {target}")
         return
     
-    # ========== ADMIN REVENUE ==========
     if data == "admin_today_stats":
         today = date.today().strftime('%Y-%m-%d')
         stats = AD_REVENUE.get(today, {"views": 0, "earnings": 0.0})
@@ -229,7 +434,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # ========== MAIN NAVIGATION ==========
+    # MAIN NAVIGATION
     if data == "enter_normal":
         USERS[cid]["mode"] = "normal"
         await query.message.reply_text(
@@ -306,7 +511,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(text, parse_mode="Markdown", reply_markup=get_main_screen())
         return
     
-    # ========== BACK NAVIGATION ==========
+    # BACK NAVIGATION
     if data == "back_main":
         await query.message.reply_text("🏥 *NHS JOBS BOT*", parse_mode="Markdown", reply_markup=get_main_screen())
         return
@@ -321,7 +526,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("👑 *PREMIUM BOT*", parse_mode="Markdown", reply_markup=get_premium_dashboard())
         return
     
-    # ========== NORMAL ACTIONS ==========
+    # NORMAL ACTIONS
     if data == "normal_search_roles":
         await query.message.reply_text(
             "🆓 *SELECT A ROLE*\n\n"
@@ -388,7 +593,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # ========== PREMIUM ACTIONS ==========
+    # PREMIUM ACTIONS
     if data == "premium_search_roles":
         if USERS[cid]["status"] != "active":
             await query.message.reply_text("🔒 Premium only!", reply_markup=get_payment_screen())
@@ -481,10 +686,9 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # ========== AD DISMISS ==========
+    # AD DISMISS
     if data == "ad_dismiss":
         USERS[cid]["queries"] = 0
-        # Track ad revenue
         today = date.today().strftime('%Y-%m-%d')
         if today not in AD_REVENUE:
             AD_REVENUE[today] = {"views": 0, "earnings": 0.0}
@@ -494,18 +698,14 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         USERS[cid]["ad_views"] += 1
         USERS[cid]["last_ad_date"] = today
         
-        # Show pending job if exists
         pending = CACHE.get(cid, {}).get("pending_job")
         if pending:
-            # Clear pending
             CACHE[cid]["pending_job"] = None
-            # Show the job they were trying to view
             jobs = CACHE.get(cid, {}).get(pending["role"], [])
             if jobs and pending["idx"] < len(jobs):
                 await show_job(query, jobs, pending["idx"], pending["role"], pending["mode"], cid)
                 return
         
-        # Continue to dashboard
         await query.message.reply_text(
             "✅ *Ad dismissed!* Continue browsing.\n\n"
             f"📊 Your ad views today: {USERS[cid]['ad_views']}\n"
@@ -514,12 +714,11 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # ========== ROLE SELECTION ==========
+    # ROLE SELECTION
     if data.startswith("N_"):
         role = data.replace("N_", "")
         USERS[cid]["role"] = role
         
-        # Check query limit
         USERS[cid]["queries"] += 1
         if USERS[cid]["queries"] > 2 and cid not in KING_PASS:
             await query.message.reply_text(
@@ -583,7 +782,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # ========== PAGINATION ==========
+    # PAGINATION
     if data.startswith("PAGE_"):
         parts = data.split("_")
         mode = parts[1]
@@ -602,7 +801,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # ========== VIEW LOCKED JOB ==========
+    # VIEW LOCKED JOB
     if data.startswith("LOCK_"):
         parts = data.split("_")
         role = parts[1]
@@ -640,7 +839,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # ========== VIEW JOB (FULL) ==========
+    # VIEW JOB (FULL) — THIS IS THE JOB FINDER SECTION
     if data.startswith("VIEW_"):
         parts = data.split("_")
         mode = parts[1]
@@ -652,16 +851,14 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("⚠️ Job not found.")
             return
         
-        # CHECK AD TRIGGER (Normal users only)
+        # AD TRIGGER
         if mode == "normal" and cid not in KING_PASS:
             USERS[cid]["jobs_viewed"] += 1
             if USERS[cid]["jobs_viewed"] % AD_INTERVAL == 0:
-                # SHOW AD FIRST
                 today = date.today().strftime('%Y-%m-%d')
                 if today not in AD_REVENUE:
                     AD_REVENUE[today] = {"views": 0, "earnings": 0.0}
                 
-                # Store pending job to show after ad
                 CACHE.setdefault(cid, {})["pending_job"] = {"mode": mode, "role": role, "idx": idx}
                 
                 await query.message.reply_text(
@@ -679,7 +876,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_job(query, jobs, idx, role, mode, cid)
         return
     
-    # ========== NAVIGATION ==========
+    # NAVIGATION
     if data.startswith("NAV_"):
         parts = data.split("_")
         mode = parts[1]
@@ -690,7 +887,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not jobs or idx < 0 or idx >= len(jobs):
             return
         
-        # Check ad for normal users
         if mode == "normal" and cid not in KING_PASS:
             USERS[cid]["jobs_viewed"] += 1
             if USERS[cid]["jobs_viewed"] % AD_INTERVAL == 0:
@@ -713,26 +909,43 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_job(query, jobs, idx, role, mode, cid)
         return
     
-    # ========== COPY LINK ==========
-    if data.startswith("COPY_"):
+    # COPY ROLE NAME
+    if data.startswith("COPYROLE_"):
         parts = data.split("_")
         mode = parts[1]
         role = parts[2]
         idx = int(parts[3])
         
-        jobs = CACHE.get(cid, {}).get(role, [])
-        if not jobs or idx >= len(jobs):
-            return
+        # Convert role code to readable name
+        role_names = {
+            "JCF": "Junior Clinical Fellow",
+            "SCF": "Senior Clinical Fellow",
+            "Teaching": "Teaching Fellow",
+            "TrustGrade": "Trust Grade Doctor",
+            "LAS": "Locum Appointment Service",
+            "Locum": "Locum Doctor",
+            "FY1": "Foundation Year 1",
+            "FY2": "Foundation Year 2",
+            "CT": "Core Trainee",
+            "ST_Junior": "Specialty Registrar ST1-ST2",
+            "ST_Senior": "Specialty Registrar ST3-ST8",
+            "SAS": "SAS Grade Doctor",
+            "Specialist": "Specialist Grade Doctor",
+            "GP": "General Practitioner",
+            "Dental": "Dental Trainee"
+        }
         
-        job = jobs[idx]
+        readable_role = role_names.get(role, role.replace("_", " "))
+        
         await query.message.reply_text(
-            f"📋 *COPY THIS LINK:*\n\n`{job['Link']}`\n\n"
-            f"*{job['Job Title']}*\n🏥 {job['Employer']}",
+            f"📋 *COPY THIS ROLE NAME:*\n\n"
+            f"`{readable_role}`\n\n"
+            f"✅ *Now go to www.jobs.nhs.uk and paste this in the search box!*",
             parse_mode="Markdown"
         )
         return
     
-    # ========== AI COMPARISON ==========
+    # AI COMPARISON
     if data.startswith("AI_"):
         parts = data.split("_")
         mode = parts[1]
@@ -771,7 +984,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(text, parse_mode="Markdown")
         return
     
-    # ========== TODAY'S JOBS VIEW ==========
+    # TODAY'S JOBS VIEW
     if data.startswith("TODAYVIEW_"):
         if USERS[cid]["status"] != "active":
             await query.message.reply_text("🔒 Premium only!", reply_markup=get_payment_screen())
@@ -802,13 +1015,21 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += f"\n🔵 Desirable:\n"
         for i, c in enumerate(job['Desirable_Criteria'].split(", "), 1):
             text += f"   {i}. {c.strip()}\n"
-        text += f"\n🔗 `{job['Link']}`"
+        
+        # JOB FINDER GUIDANCE
+        text += f"\n✅ *HOW TO APPLY FOR THIS ROLE:*\n"
+        text += f"1️⃣ Go to: www.jobs.nhs.uk\n"
+        text += f"2️⃣ Search: `{job['Job Title'][:30]}`\n"
+        text += f"3️⃣ Filter by: {job['Region']}\n"
+        text += f"4️⃣ Upload CV + GMC certificate\n"
+        text += f"5️⃣ Apply before deadline!\n\n"
+        text += f"📋 *Copy this role name:*\n`{job['Job Title'][:40]}`"
         
         await query.message.reply_text(
             text,
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📋 COPY LINK", callback_data=f"TODAYCOPY_{idx}")],
+                [InlineKeyboardButton("📋 COPY ROLE NAME", callback_data=f"TODAYCOPY_{idx}")],
                 [InlineKeyboardButton("📊 AI COMPARE", callback_data=f"TODAYAI_{idx}")],
                 [InlineKeyboardButton("🔙 BACK", callback_data="premium_todays_vault"),
                  InlineKeyboardButton("🏠 MAIN", callback_data="back_main")]
@@ -838,7 +1059,12 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         idx = int(data.replace("TODAYCOPY_", ""))
         jobs = CACHE.get(cid, {}).get("todays", [])
         if jobs and idx < len(jobs):
-            await query.message.reply_text(f"📋 `{jobs[idx]['Link']}`", parse_mode="Markdown")
+            job = jobs[idx]
+            await query.message.reply_text(
+                f"📋 *COPY THIS ROLE:*\n\n`{job['Job Title'][:40]}`\n\n"
+                f"✅ Paste this in www.jobs.nhs.uk search box!",
+                parse_mode="Markdown"
+            )
         return
     
     if data.startswith("TODAYAI_"):
@@ -855,7 +1081,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(f"📊 *AI COMPARISON*\n\n*{job['Job Title']}*\n\nSet up profile for scores!", parse_mode="Markdown")
         return
     
-    # ========== PAYMENT ==========
+    # PAYMENT
     if data == "unlock_premium":
         if cid in PENDING and PENDING[cid]["status"] == "pending":
             await query.message.reply_text("⏳ Payment already pending!", parse_mode="Markdown", reply_markup=get_pending_screen())
@@ -902,7 +1128,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 
-# ==================== SHOW JOB HELPER ====================
+# ==================== SHOW JOB HELPER (JOB FINDER) ====================
 async def show_job(query, jobs, idx, role, mode, cid):
     job = jobs[idx]
     now = datetime.now()
@@ -920,6 +1146,27 @@ async def show_job(query, jobs, idx, role, mode, cid):
     badge = "👑 " if is_premium else ""
     fresh = "🔥 FRESH! " if age_hours < 12 else ""
     
+    # Role name mapping for search
+    role_names = {
+        "JCF": "Junior Clinical Fellow",
+        "SCF": "Senior Clinical Fellow",
+        "Teaching": "Teaching Fellow",
+        "TrustGrade": "Trust Grade Doctor",
+        "LAS": "Locum Appointment Service",
+        "Locum": "Locum Doctor",
+        "FY1": "Foundation Year 1",
+        "FY2": "Foundation Year 2",
+        "CT": "Core Trainee",
+        "ST_Junior": "Specialty Registrar ST1-ST2",
+        "ST_Senior": "Specialty Registrar ST3-ST8",
+        "SAS": "SAS Grade Doctor",
+        "Specialist": "Specialist Grade Doctor",
+        "GP": "General Practitioner",
+        "Dental": "Dental Trainee"
+    }
+    
+    readable_role = role_names.get(role, role.replace("_", " "))
+    
     text = f"{badge}{fresh}📌 *Job {idx+1} of {len(jobs)}*\n\n"
     text += f"*{job['Job Title']}*\n"
     text += f"🏥 {job['Employer']}\n"
@@ -928,6 +1175,7 @@ async def show_job(query, jobs, idx, role, mode, cid):
     text += f"📍 {job['Region']}\n"
     text += f"⏰ Posted: {age_text}\n\n"
     
+    # PERSON SPECIFICATION
     text += f"📋 *PERSON SPECIFICATION*\n\n"
     text += f"🔴 *ESSENTIAL (Must Have):*\n"
     for i, c in enumerate(job['Essential_Criteria'].split(", "), 1):
@@ -938,30 +1186,18 @@ async def show_job(query, jobs, idx, role, mode, cid):
         text += f"   {i}. {c.strip()}\n"
     text += f"\n"
     
-           # REAL NHS SEARCH LINK based on role
-    search_keywords = {
-        "JCF": "junior%20clinical%20fellow",
-        "SCF": "senior%20clinical%20fellow",
-        "Teaching": "teaching%20fellow",
-        "TrustGrade": "trust%20grade",
-        "LAS": "locum%20appointment%20service",
-        "Locum": "locum%20doctor",
-        "FY1": "foundation%20year%201",
-        "FY2": "foundation%20year%202",
-        "CT": "core%20trainee",
-        "ST_Junior": "specialty%20registrar%20st1",
-        "ST_Senior": "specialty%20registrar%20st3",
-        "SAS": "specialty%20doctor",
-        "Specialist": "specialist%20grade",
-        "GP": "general%20practitioner",
-        "Dental": "dental%20trainee"
-    }
+    # JOB FINDER — REAL APPLICATION GUIDANCE
+    text += f"✅ *HOW TO APPLY FOR REAL NHS JOBS:*\n"
+    text += f"1️⃣ Go to: www.jobs.nhs.uk\n"
+    text += f"2️⃣ Search: `{readable_role}`\n"
+    text += f"3️⃣ Filter by: {job['Region']}\n"
+    text += f"4️⃣ Upload CV + GMC certificate\n"
+    text += f"5️⃣ Apply before deadline!\n\n"
     
-    keyword = search_keywords.get(role, role.replace("_", "%20"))
-    real_link = f"https://www.jobs.nhs.uk/candidate/search/results?keyword={keyword}"
+    text += f"💡 *Pro Tip:*\n"
+    text += f"Use this Person Spec as your checklist!\n\n"
     
-    text += f"🔗 *APPLICATION LINK:*\n`{job['Link']}`\n\n"
-    text += f"🔍 *SEARCH REAL NHS JOBS:*\n`{real_link}`"
+    text += f"📋 *COPY THIS ROLE NAME:*\n`{readable_role}`"
     
     if is_premium:
         text += f"\n\n✨ *PREMIUM ACTIVE*"
@@ -998,7 +1234,7 @@ async def alert_daemon(app):
                             f"📋 *PERSON SPEC:*\n"
                             f"🔴 {row['Essential_Criteria'][:80]}...\n"
                             f"🔵 {row['Desirable_Criteria'][:80]}...\n\n"
-                            f"🔗 `{row['Link']}`"
+                            f"✅ *Go to www.jobs.nhs.uk and search now!*"
                         )
                         try:
                             await app.bot.send_message(chat_id=int(cid), text=text, parse_mode="Markdown")
@@ -1028,7 +1264,7 @@ async def main():
     await app.updater.start_polling(drop_pending_updates=True)
     
     print("=" * 50)
-    print("✅ NHS JOBS BOT WITH AD MONETIZATION RUNNING!")
+    print("✅ NHS JOBS BOT — JOB FINDER MODE RUNNING!")
     print(f"👑 Admin: {ADMIN_CHAT_ID}")
     print(f"📺 Ad Interval: Every {AD_INTERVAL} job views")
     print(f"💰 Ad Rate: ${AD_EARNINGS_PER_VIEW}/view")

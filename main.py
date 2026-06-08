@@ -938,7 +938,30 @@ async def show_job(query, jobs, idx, role, mode, cid):
         text += f"   {i}. {c.strip()}\n"
     text += f"\n"
     
-    text += f"🔗 *APPLICATION LINK:*\n`{job['Link']}`"
+           # REAL NHS SEARCH LINK based on role
+    search_keywords = {
+        "JCF": "junior%20clinical%20fellow",
+        "SCF": "senior%20clinical%20fellow",
+        "Teaching": "teaching%20fellow",
+        "TrustGrade": "trust%20grade",
+        "LAS": "locum%20appointment%20service",
+        "Locum": "locum%20doctor",
+        "FY1": "foundation%20year%201",
+        "FY2": "foundation%20year%202",
+        "CT": "core%20trainee",
+        "ST_Junior": "specialty%20registrar%20st1",
+        "ST_Senior": "specialty%20registrar%20st3",
+        "SAS": "specialty%20doctor",
+        "Specialist": "specialist%20grade",
+        "GP": "general%20practitioner",
+        "Dental": "dental%20trainee"
+    }
+    
+    keyword = search_keywords.get(role, role.replace("_", "%20"))
+    real_link = f"https://www.jobs.nhs.uk/candidate/search/results?keyword={keyword}"
+    
+    text += f"🔗 *APPLICATION LINK:*\n`{job['Link']}`\n\n"
+    text += f"🔍 *SEARCH REAL NHS JOBS:*\n`{real_link}`"
     
     if is_premium:
         text += f"\n\n✨ *PREMIUM ACTIVE*"

@@ -142,7 +142,7 @@ def get_job_detail(idx, role, mode, total, is_premium):
         nav.append(InlineKeyboardButton("➡️", callback_data=f"NAV_{mode}_{role}_{idx+1}"))
     buttons.append(nav)
     
-    buttons.append([InlineKeyboardButton("📋 COPY ROLE NAME", callback_data=f"COPYROLE_{mode}_{role}_{idx}")])
+    buttons.append([InlineKeyboardButton("📋 COPY SEARCH TERM", callback_data=f"COPY_{mode}_{role}_{idx}")])
     
     if is_premium:
         buttons.append([InlineKeyboardButton("📊 AI COMPARE ME VS JOB", callback_data=f"AI_{mode}_{role}_{idx}")])
@@ -839,7 +839,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # VIEW JOB (FULL) — THIS IS THE JOB FINDER SECTION
+    # VIEW JOB (FULL)
     if data.startswith("VIEW_"):
         parts = data.split("_")
         mode = parts[1]
@@ -909,38 +909,23 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_job(query, jobs, idx, role, mode, cid)
         return
     
-    # COPY ROLE NAME
-    if data.startswith("COPYROLE_"):
+    # COPY SEARCH TERM
+    if data.startswith("COPY_"):
         parts = data.split("_")
         mode = parts[1]
         role = parts[2]
         idx = int(parts[3])
         
-        # Convert role code to readable name
-        role_names = {
-            "JCF": "Junior Clinical Fellow",
-            "SCF": "Senior Clinical Fellow",
-            "Teaching": "Teaching Fellow",
-            "TrustGrade": "Trust Grade Doctor",
-            "LAS": "Locum Appointment Service",
-            "Locum": "Locum Doctor",
-            "FY1": "Foundation Year 1",
-            "FY2": "Foundation Year 2",
-            "CT": "Core Trainee",
-            "ST_Junior": "Specialty Registrar ST1-ST2",
-            "ST_Senior": "Specialty Registrar ST3-ST8",
-            "SAS": "SAS Grade Doctor",
-            "Specialist": "Specialist Grade Doctor",
-            "GP": "General Practitioner",
-            "Dental": "Dental Trainee"
-        }
+        jobs = CACHE.get(cid, {}).get(role, [])
+        if not jobs or idx >= len(jobs):
+            return
         
-        readable_role = role_names.get(role, role.replace("_", " "))
-        
+        job = jobs[idx]
+        # job['Link'] now contains the SEARCH TERM from new CSV
         await query.message.reply_text(
-            f"📋 *COPY THIS ROLE NAME:*\n\n"
-            f"`{readable_role}`\n\n"
-            f"✅ *Now go to www.jobs.nhs.uk and paste this in the search box!*",
+            f"📋 *COPY THIS SEARCH TERM:*\n\n"
+            f"`{job['Link']}`\n\n"
+            f"✅ Go to www.jobs.nhs.uk and paste this in the search box!",
             parse_mode="Markdown"
         )
         return
@@ -1010,26 +995,27 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📋 *PERSON SPEC*\n"
             f"🔴 Essential:\n"
         )
-        for i, c in enumerate(job['Essential_Criteria'].split(", "), 1):
+        for i, c in enumerate(job['Essential_Criteria'].split(", "), 1:
             text += f"   {i}. {c.strip()}\n"
         text += f"\n🔵 Desirable:\n"
-        for i, c in enumerate(job['Desirable_Criteria'].split(", "), 1):
+        for i, c in enumerate(job['Desirable_Criteria'].split(", "), 1:
             text += f"   {i}. {c.strip()}\n"
         
         # JOB FINDER GUIDANCE
         text += f"\n✅ *HOW TO APPLY FOR THIS ROLE:*\n"
         text += f"1️⃣ Go to: www.jobs.nhs.uk\n"
-        text += f"2️⃣ Search: `{job['Job Title'][:30]}`\n"
+        text += f"2️⃣ Search: `{job['Link']}`\n"
         text += f"3️⃣ Filter by: {job['Region']}\n"
         text += f"4️⃣ Upload CV + GMC certificate\n"
         text += f"5️⃣ Apply before deadline!\n\n"
-        text += f"📋 *Copy this role name:*\n`{job['Job Title'][:40]}`"
+        
+        text += f"📋 *Copy this search term:*\n`{job['Link']}`"
         
         await query.message.reply_text(
             text,
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📋 COPY ROLE NAME", callback_data=f"TODAYCOPY_{idx}")],
+                [InlineKeyboardButton("📋 COPY SEARCH TERM", callback_data=f"TODAYCOPY_{idx}")],
                 [InlineKeyboardButton("📊 AI COMPARE", callback_data=f"TODAYAI_{idx}")],
                 [InlineKeyboardButton("🔙 BACK", callback_data="premium_todays_vault"),
                  InlineKeyboardButton("🏠 MAIN", callback_data="back_main")]
@@ -1061,7 +1047,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if jobs and idx < len(jobs):
             job = jobs[idx]
             await query.message.reply_text(
-                f"📋 *COPY THIS ROLE:*\n\n`{job['Job Title'][:40]}`\n\n"
+                f"📋 *COPY THIS SEARCH TERM:*\n\n`{job['Link']}`\n\n"
                 f"✅ Paste this in www.jobs.nhs.uk search box!",
                 parse_mode="Markdown"
             )
@@ -1146,27 +1132,6 @@ async def show_job(query, jobs, idx, role, mode, cid):
     badge = "👑 " if is_premium else ""
     fresh = "🔥 FRESH! " if age_hours < 12 else ""
     
-    # Role name mapping for search
-    role_names = {
-        "JCF": "Junior Clinical Fellow",
-        "SCF": "Senior Clinical Fellow",
-        "Teaching": "Teaching Fellow",
-        "TrustGrade": "Trust Grade Doctor",
-        "LAS": "Locum Appointment Service",
-        "Locum": "Locum Doctor",
-        "FY1": "Foundation Year 1",
-        "FY2": "Foundation Year 2",
-        "CT": "Core Trainee",
-        "ST_Junior": "Specialty Registrar ST1-ST2",
-        "ST_Senior": "Specialty Registrar ST3-ST8",
-        "SAS": "SAS Grade Doctor",
-        "Specialist": "Specialist Grade Doctor",
-        "GP": "General Practitioner",
-        "Dental": "Dental Trainee"
-    }
-    
-    readable_role = role_names.get(role, role.replace("_", " "))
-    
     text = f"{badge}{fresh}📌 *Job {idx+1} of {len(jobs)}*\n\n"
     text += f"*{job['Job Title']}*\n"
     text += f"🏥 {job['Employer']}\n"
@@ -1187,9 +1152,10 @@ async def show_job(query, jobs, idx, role, mode, cid):
     text += f"\n"
     
     # JOB FINDER — REAL APPLICATION GUIDANCE
+    # job['Link'] now contains the SEARCH TERM from new CSV
     text += f"✅ *HOW TO APPLY FOR REAL NHS JOBS:*\n"
     text += f"1️⃣ Go to: www.jobs.nhs.uk\n"
-    text += f"2️⃣ Search: `{readable_role}`\n"
+    text += f"2️⃣ Search: `{job['Link']}`\n"
     text += f"3️⃣ Filter by: {job['Region']}\n"
     text += f"4️⃣ Upload CV + GMC certificate\n"
     text += f"5️⃣ Apply before deadline!\n\n"
@@ -1197,7 +1163,7 @@ async def show_job(query, jobs, idx, role, mode, cid):
     text += f"💡 *Pro Tip:*\n"
     text += f"Use this Person Spec as your checklist!\n\n"
     
-    text += f"📋 *COPY THIS ROLE NAME:*\n`{readable_role}`"
+    text += f"📋 *COPY THIS SEARCH TERM:*\n`{job['Link']}`"
     
     if is_premium:
         text += f"\n\n✨ *PREMIUM ACTIVE*"
@@ -1234,7 +1200,7 @@ async def alert_daemon(app):
                             f"📋 *PERSON SPEC:*\n"
                             f"🔴 {row['Essential_Criteria'][:80]}...\n"
                             f"🔵 {row['Desirable_Criteria'][:80]}...\n\n"
-                            f"✅ *Go to www.jobs.nhs.uk and search now!*"
+                            f"✅ *Go to www.jobs.nhs.uk and search: {row['Link']}*"
                         )
                         try:
                             await app.bot.send_message(chat_id=int(cid), text=text, parse_mode="Markdown")

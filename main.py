@@ -1,3 +1,6 @@
+import nest_asyncio
+nest_asyncio.apply()
+
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 import asyncio
@@ -12,5 +15,6 @@ async def main():
     app.add_handler(CommandHandler("start", start))
     await app.run_polling()
 
-if __name__ == "__main__":
-    asyncio.run(main())
+# Use nest_asyncio instead of asyncio.run()
+loop = asyncio.get_event_loop()
+loop.run_until_complete(main())
